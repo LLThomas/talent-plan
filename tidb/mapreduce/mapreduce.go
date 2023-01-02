@@ -112,7 +112,44 @@ func (c *MRCluster) worker() {
 				// hint: don't encode results returned by ReduceF, and just output
 				// them into the destination file directly so that users can get
 				// results formatted as what they want.
-				panic("YOUR CODE HERE")
+
+				// read intermediate files and store all key to kvs
+				kvs := make(map[string][]string)
+				for i := 0; i < t.nMap; i++ {
+					rpath := reduceName(t.dataDir, t.jobName, i, t.taskNumber)
+					file, err := os.Open(rpath)
+					if err != nil {
+						panic(err)
+					}
+
+					decoder := json.NewDecoder(file)
+					for decoder.More() {
+						var kv KeyValue
+						err = decoder.Decode(&kv)
+						if err != nil {
+							panic(err)
+						}
+						if _, ok := kvs[kv.Key]; ok {
+							kvs[kv.Key] = append(kvs[kv.Key], kv.Value)
+						} else {
+							kvs[kv.Key] = []string{kv.Value}
+						}
+					}
+					err = file.Close()
+					if err != nil {
+						panic(err)
+					}
+				}
+				// write reduce result to result files
+				fw, bw := CreateFileAndBuf(mergeName(t.dataDir, t.jobName, t.taskNumber))
+				for k, v := range kvs {
+					reduceRes := t.reduceF(k, v)
+					_, err := bw.Write([]byte(reduceRes))
+					if err != nil {
+						panic(err)
+					}
+				}
+				SafeClose(fw, bw)
 			}
 			t.wg.Done()
 		case <-c.exit:
@@ -159,7 +196,29 @@ func (c *MRCluster) run(jobName, dataDir string, mapF MapF, reduceF ReduceF, map
 
 	// reduce phase
 	// YOUR CODE HERE :D
-	panic("YOUR CODE HERE")
+	reduceTasks := make([]*task, 0, nReduce)
+	for i := 0; i < nReduce; i++ {
+		t := &task{
+			dataDir:    dataDir,
+			jobName:    jobName,
+			phase:      reducePhase,
+			taskNumber: i,
+			nReduce:    nReduce,
+			nMap:       nMap,
+			reduceF:    reduceF,
+		}
+		t.wg.Add(1)
+		reduceTasks = append(reduceTasks, t)
+		go func() { c.taskCh <- t }()
+	}
+
+	notifyFiles := make([]string, 0, nReduce)
+	for _, t := range reduceTasks {
+		t.wg.Wait()
+		name := mergeName(t.dataDir, t.jobName, t.taskNumber)
+		notifyFiles = append(notifyFiles, name)
+	}
+	notify <- notifyFiles
 }
 
 func ihash(s string) int {

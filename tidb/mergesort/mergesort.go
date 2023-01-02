@@ -45,6 +45,9 @@ func split(src []int64, start int64, end int64) {
 	m := (end-start)/2 + start
 	split(src, start, m)
 	split(src, m+1, end)
+	if src[m] <= src[m+1] {
+		return
+	}
 	merge(src, start, m, end)
 }
 
